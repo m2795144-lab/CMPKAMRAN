@@ -36,25 +36,34 @@
   const MY_SECRET_PATH = 'aicompiler/my_private_workspace_998877';
 
   window._fbSaveConfig = async function(cfg) {
-    try {
-      await set(ref(db, MY_SECRET_PATH), cfg);
-    } catch (e) {
-      console.error("Firebase Sync Save Error:", e);
-    }
-  };
+      try {
+        await set(ref(db, MY_SECRET_PATH), cfg);
+      } catch (e) {
+        console.error("Firebase Sync Save Error:", e);
+      }
+      // Fallback to ensure it ALWAYS saves locally, even if Firebase rules block it
+      localStorage.setItem('aicompiler_fallback_cfg', JSON.stringify(cfg));
+    };
   
-  window._fbLoadConfig = async function() {
-    try {
-      // 5-second timeout to prevent infinite loading freezes
-      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Firebase Timeout")), 5000));
-      const snap = await Promise.race([get(ref(db, MY_SECRET_PATH)), timeout]);
+    window._fbLoadConfig = async function() {
+      let fbData = null;
+      try {
+        // 5-second timeout to prevent infinite loading freezes
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Firebase Timeout")), 5000));
+        const snap = await Promise.race([get(ref(db, MY_SECRET_PATH)), timeout]);
       
-      return snap.exists() ? snap.val() : null;
-    } catch (e) {
-      console.warn("Could not sync config, loading blank workspace.", e);
-      return null; 
-    }
-  };
+        if (snap.exists()) fbData = snap.val();
+      } catch (e) {
+        console.warn("Could not sync config from Firebase.", e);
+      }
+    
+      // If Firebase failed (e.g., security rules blocked it), use the local fallback
+      if (!fbData) {
+        const localData = localStorage.getItem('aicompiler_fallback_cfg');
+        if (localData) fbData = JSON.parse(localData);
+      }
+      return fbData;
+    };
   
   window._fbReady = true;
 </script>
@@ -2424,12 +2433,13 @@ window.addEventListener('DOMContentLoaded', async function() {
       } catch(e) {}
     
       showMenuLoader('Loading Repository...');
-    await syncCurrentFile();
-    await fetchFileTree(false, true);
-  } else if (ghRepos.length === 0 && ghToken) {
-    showMenuLoader('Fetching Repositories...');
-    await ghFetchAllRepos();
-  }
+          await syncCurrentFile();
+          await fetchFileTree(false, true);
+        } else if (ghRepos.length === 0 && ghToken) {
+          showMenuLoader('Fetching Repositories...');
+          await ghFetchAllRepos();
+          if (ghRepo) await syncCurrentFile();
+        }
   hideMenuLoader();
 });
 
@@ -3189,9 +3199,13 @@ async function uploadSingleFileToRepo(repo, path, base64Content, branch, message
   return await putRes.json();
 }
 
-document.getElementById('ghFetchReposBtn').addEventListener('click', function() {
+document.getElementById('ghFetchReposBtn').addEventListener('click', async function() {
   ghToken = document.getElementById('ghToken').value.trim();
-  ghFetchAllRepos();
+  ghUser = document.getElementById('ghUser').value.trim();
+  ghBranch = document.getElementById('ghBranch').value.trim() || 'main';
+  ghFilePath = document.getElementById('ghFilePath').value.trim() || 'index.html';
+  await ghFetchAllRepos();
+  if (ghRepo) await syncCurrentFile();
 });
 
 window.syncCurrentFile = async function() {
