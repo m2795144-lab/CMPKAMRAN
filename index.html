@@ -43,11 +43,11 @@
         if (typeof toast === 'function') toast('❌ Firebase Save Error: ' + e.message, 'err', 5000);
       }
     };
-  
+
     window._fbLoadConfig = async function() {
       try {
-        // 5-second timeout to prevent infinite loading freezes
-        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Firebase Timeout")), 5000));
+        // 15-second timeout. 5 seconds was too short for Firebase cold starts on some connections, causing empty loads!
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Firebase Timeout")), 15000));
         const snap = await Promise.race([get(ref(db, MY_SECRET_PATH)), timeout]);
       
         return snap.exists() ? snap.val() : null;
@@ -883,10 +883,10 @@ async function ghLoadConfigFromFirebase() {
         ghUser = cfg.user || '';
         ghRepo = cfg.repo || '';
         ghBranch = cfg.branch || 'main';
-                    ghFilePath = cfg.filePath || 'index.html';
-                    ghRepos = cfg.repos || [];
-                    ghBookmarkedRepos = cfg.bookmarkedRepos || [];
-                    if (cfg.wallpaper !== undefined) {
+        ghFilePath = cfg.filePath || 'index.html';
+        ghRepos = cfg.repos || [];
+        ghBookmarkedRepos = cfg.bookmarkedRepos || [];
+        if (cfg.wallpaper !== undefined) {
           settings.wallpaper = cfg.wallpaper;
           localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
           applyWallpaper(cfg.wallpaper);
@@ -895,12 +895,6 @@ async function ghLoadConfigFromFirebase() {
       }
     }
   } catch(e) {}
-}
-
-function ghSaveConfig() {
-  const cfg = { token: ghToken, user: ghUser, repo: ghRepo, branch: ghBranch, filePath: ghFilePath, repos: ghRepos, bookmarkedRepos: ghBookmarkedRepos, wallpaper: settings.wallpaper || '' };
-  if (window._fbSaveConfig) window._fbSaveConfig(cfg).catch(function(){});
-  document.getElementById('ghPushBtn').disabled = !ghRepo || !ghToken;
 }
 
 function renderRepoTabs() {
@@ -2413,26 +2407,29 @@ window.addEventListener('DOMContentLoaded', async function() {
   while (!window._fbReady && fbWait < 20) { await new Promise(r => setTimeout(r, 50)); fbWait++; }
   
   showMenuLoader('Syncing Configuration...');
-    await ghLoadConfigFromFirebase();
-    renderRepoTabs();
+  await ghLoadConfigFromFirebase();
+  renderRepoTabs();
   
+  if (ghRepo && ghToken) {
+    try {
+      let activeBuild = JSON.parse(localStorage.getItem('active_build_v1'));
+      if (activeBuild && activeBuild.workflowFile && activeBuild.artifactName) {
+        showBuildOverlay(activeBuild.title || 'Resuming Build...');
+        pollOverlayStatus(activeBuild.workflowFile, activeBuild.artifactName);
+      }
+    } catch(e) {}
+  
+    showMenuLoader('Loading Repository...');
+    await syncCurrentFile();
+    await fetchFileTree(false, true);
+  } else if (ghRepos.length === 0 && ghToken) {
+    showMenuLoader('Fetching Repositories...');
+    await ghFetchAllRepos();
     if (ghRepo && ghToken) {
-      try {
-        let activeBuild = JSON.parse(localStorage.getItem('active_build_v1'));
-        if (activeBuild && activeBuild.workflowFile && activeBuild.artifactName) {
-          showBuildOverlay(activeBuild.title || 'Resuming Build...');
-          pollOverlayStatus(activeBuild.workflowFile, activeBuild.artifactName);
-        }
-      } catch(e) {}
-    
-      showMenuLoader('Loading Repository...');
-          await syncCurrentFile();
-          await fetchFileTree(false, true);
-        } else if (ghRepos.length === 0 && ghToken) {
-            showMenuLoader('Fetching Repositories...');
-            await ghFetchAllRepos();
-            if (ghRepo && ghToken) await syncCurrentFile();
-          }
+      await syncCurrentFile();
+      await fetchFileTree(false, true);
+    }
+  }
   hideMenuLoader();
 });
 
@@ -3145,7 +3142,10 @@ document.getElementById('ghSaveBtn').addEventListener('click', async function() 
   document.getElementById('ghConfigPanel').classList.remove('open');
   $backdrop.classList.remove('open');
   toast('💾 GitHub Settings Saved!');
-  if (ghRepo && ghToken) await syncCurrentFile();
+  if (ghRepo && ghToken) {
+    await syncCurrentFile();
+    await fetchFileTree(false, true);
+  }
 });
 
 function readFileAsBase64(file) {
